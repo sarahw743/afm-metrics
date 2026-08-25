@@ -1,0 +1,26 @@
+{
+  "name": "afm-metrics",
+  "version": "0.1.0",
+  "description": "Parse Adobe Font Metrics (AFM) files with precise, line-and-column error messages",
+  "license": "MIT",
+  "author": "sarahw743",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "keywords": [
+    "afm",
+    "font",
+    "font-metrics",
+    "typography",
+    "postscript",
+    "pdf"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}
