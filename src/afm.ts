@@ -28,6 +28,18 @@ export interface FontMetrics {
   /** AFM glyph-space coordinates are always expressed per 1000 units. */
   unitsPerEm: number;
   characters: CharacterMetric[];
+  /** Pairwise kerning adjustments, present only if the file has a StartKernData section. */
+  kerningPairs: KerningPair[];
+}
+
+/** A pairwise kerning adjustment, as read from a "KPX first second amount" line. */
+export interface KerningPair {
+  /** PostScript name of the first glyph in the pair. */
+  first: string;
+  /** PostScript name of the second glyph in the pair. */
+  second: string;
+  /** Amount to add to the first glyph's width when it's followed by the second, in glyph space units. */
+  adjustment: number;
 }
 
 /** Fast lookup structure built from a parsed FontMetrics's character list. */
@@ -155,6 +167,31 @@ function parseCharMetricsLine(ctx: LineContext): CharacterMetric {
   return { code: code ?? -1, width, name };
 }
 
+function parseKernPairLine(ctx: LineContext): KerningPair {
+  // KPX lines are space-separated, not semicolon-delimited like C/WX/N lines:
+  // "KPX first second amount". A handful of AFM writers emit KPY/KPH pairs
+  // too, but KPX (plain x-kerning) is what every layout engine actually reads.
+  const parts = ctx.content.split(/\s+/);
+  if (parts.length !== 4) {
+    const column = columnOf(ctx.raw, ctx.content, ctx.leading, ctx.content);
+    throw new AfmParseError(
+      `expected "KPX first second amount", found ${parts.length - 1} field(s) after "KPX"`,
+      ctx.number,
+      column,
+      ctx.raw,
+    );
+  }
+
+  const [, first, second, amountText] = parts;
+  const amount = Number(amountText);
+  if (!Number.isFinite(amount)) {
+    const column = columnOf(ctx.raw, ctx.content, ctx.leading, amountText);
+    throw new AfmParseError(`expected a number for the kerning amount, found "${amountText}"`, ctx.number, column, ctx.raw);
+  }
+
+  return { first, second, adjustment: amount };
+}
+
 /**
  * Parses the text of an AFM (Adobe Font Metrics) file into structured
  * metrics. Throws AfmParseError, with a line and column pointing at the
@@ -165,6 +202,7 @@ export function parseAfm(source: string): FontMetrics {
 
   let sawStart = false;
   let inCharMetrics = false;
+  let inKernPairs = false;
   let fontName: string | undefined;
   let fullName: string | undefined;
   let familyName: string | undefined;
@@ -179,6 +217,7 @@ export function parseAfm(source: string): FontMetrics {
   let ascender: number | undefined;
   let descender: number | undefined;
   const characters: CharacterMetric[] = [];
+  const kerningPairs: KerningPair[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const ctx = lineContext(lines[i] ?? "", i + 1);
@@ -192,6 +231,18 @@ export function parseAfm(source: string): FontMetrics {
         continue;
       }
       characters.push(parseCharMetricsLine(ctx));
+      continue;
+    }
+
+    if (inKernPairs) {
+      if (ctx.content === "EndKernPairs") {
+        inKernPairs = false;
+        continue;
+      }
+      if (ctx.content.startsWith("KPX ")) {
+        kerningPairs.push(parseKernPairLine(ctx));
+      }
+      // KPY/KPH and other non-KPX pair kinds aren't modeled; skip them.
       continue;
     }
 
@@ -242,9 +293,14 @@ export function parseAfm(source: string): FontMetrics {
       case "StartCharMetrics":
         inCharMetrics = true;
         break;
+      case "StartKernPairs":
+        inKernPairs = true;
+        break;
       default:
-        // Kerning data, composite-character data, and anything else the
-        // spec allows but this library doesn't model yet is skipped.
+        // StartKernData/EndKernData are just a container around
+        // StartKernPairs and carry no data of their own. Composite-character
+        // data and anything else the spec allows but this library doesn't
+        // model yet is skipped too.
         break;
     }
   }
@@ -266,6 +322,7 @@ export function parseAfm(source: string): FontMetrics {
     fontBBox,
     unitsPerEm: 1000,
     characters,
+    kerningPairs,
   };
   if (fullName !== undefined) metrics.fullName = fullName;
   if (familyName !== undefined) metrics.familyName = familyName;

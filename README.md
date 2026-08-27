@@ -92,7 +92,9 @@ expected a number after "WX", found "-" (line 18, column 11)
 
 `FontMetrics` covers the font-level fields (`fontName`, `fontBBox`,
 `capHeight`, `ascender`, `descender`, ...) plus a `characters` array of
-`{ code, width, name }` entries — one per glyph the AFM file describes.
+`{ code, width, name }` entries — one per glyph the AFM file describes — and
+a `kerningPairs` array of `{ first, second, adjustment }` entries parsed from
+the file's `StartKernData`/`KPX` section, if it has one.
 
 ## Scope
 
