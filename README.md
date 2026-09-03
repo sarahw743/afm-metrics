@@ -44,7 +44,7 @@ reports exactly where the problem is.
 
 ```typescript
 import { readFileSync } from "node:fs";
-import { parseAfm, buildWidthIndex, AfmParseError } from "afm-metrics";
+import { parseAfm, buildWidthIndex, measureText, AfmParseError } from "afm-metrics";
 
 const source = readFileSync("Helvetica.afm", "utf8");
 
@@ -57,6 +57,9 @@ try {
 
   // Render at 12pt: width in points = (glyphWidth / unitsPerEm) * fontSize
   const pointWidth = (glyph!.width / metrics.unitsPerEm) * 12;
+
+  // Or measure a whole string at once, with kerning applied:
+  const width = measureText("AVA", widths, { kerningPairs: metrics.kerningPairs });
 } catch (error) {
   if (error instanceof AfmParseError) {
     console.error(error.message);
@@ -87,6 +90,14 @@ expected a number after "WX", found "-" (line 18, column 11)
   Throws `AfmParseError` on malformed input.
 - `buildWidthIndex(metrics: FontMetrics): WidthIndex` — builds `Map`s for
   looking glyphs up by character code or by PostScript name.
+- `measureText(text: string, index: WidthIndex, options?: MeasureOptions): number`
+  — sums glyph widths for a string, in the same glyph-space units as
+  `CharacterMetric.width`. Looks glyphs up by Unicode code point against the
+  AFM character code, so it works directly for ASCII text under
+  StandardEncoding/WinAnsiEncoding fonts. Pass `options.kerningPairs` (e.g.
+  `metrics.kerningPairs`) to apply kerning between adjacent glyphs, and
+  `options.fallbackWidth` to control the width used for characters the font
+  doesn't have (default `0`).
 - `AfmParseError` — thrown by `parseAfm`. Has `message`, `line`, `column`,
   and `sourceLine` properties in addition to the usual `Error` fields.
 
