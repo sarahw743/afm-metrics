@@ -103,9 +103,14 @@ expected a number after "WX", found "-" (line 18, column 11)
 
 `FontMetrics` covers the font-level fields (`fontName`, `fontBBox`,
 `capHeight`, `ascender`, `descender`, ...) plus a `characters` array of
-`{ code, width, name }` entries — one per glyph the AFM file describes — and
-a `kerningPairs` array of `{ first, second, adjustment }` entries parsed from
-the file's `StartKernData`/`KPX` section, if it has one.
+`{ code, width, name }` entries — one per glyph the AFM file describes — a
+`kerningPairs` array of `{ first, second, adjustment }` entries parsed from
+the file's `StartKernData`/`KPX` section, if it has one, and a `composites`
+array of `{ name, parts }` entries parsed from the file's `StartComposites`
+section, if it has one. Each composite's `parts` is a list of
+`{ name, xOffset, yOffset }` entries (from the `CC`/`PCC` lines) describing
+how simpler glyphs combine to form an accented one, e.g. `Aacute` from `A`
+and `acute`.
 
 ## Scope
 

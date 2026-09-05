@@ -30,6 +30,8 @@ export interface FontMetrics {
   characters: CharacterMetric[];
   /** Pairwise kerning adjustments, present only if the file has a StartKernData section. */
   kerningPairs: KerningPair[];
+  /** Accented/composite glyphs built from simpler ones, present only if the file has a StartComposites section. */
+  composites: CompositeCharacter[];
 }
 
 /** A pairwise kerning adjustment, as read from a "KPX first second amount" line. */
@@ -40,6 +42,23 @@ export interface KerningPair {
   second: string;
   /** Amount to add to the first glyph's width when it's followed by the second, in glyph space units. */
   adjustment: number;
+}
+
+/** One ingredient glyph of a composite character, as read from a "PCC name xoffset yoffset" field. */
+export interface CompositePart {
+  /** PostScript name of the part glyph, e.g. "A" or "acute". */
+  name: string;
+  /** Horizontal offset applied to the part when placed in the composite, in glyph space units. */
+  xOffset: number;
+  /** Vertical offset applied to the part when placed in the composite, in glyph space units. */
+  yOffset: number;
+}
+
+/** An accented/composite glyph, as read from a "CC name numparts ; PCC ... ; PCC ... ;" line. */
+export interface CompositeCharacter {
+  /** PostScript name of the composite glyph, e.g. "Aacute". */
+  name: string;
+  parts: CompositePart[];
 }
 
 /** Fast lookup structure built from a parsed FontMetrics's character list. */
@@ -192,6 +211,60 @@ function parseKernPairLine(ctx: LineContext): KerningPair {
   return { first, second, adjustment: amount };
 }
 
+function parseCompositeLine(ctx: LineContext): CompositeCharacter {
+  // Same "field ; field ; field ;" shape as C/WX/N lines, but the first
+  // field is "CC name numparts" and the rest are "PCC part xoffset yoffset".
+  const fields = ctx.content.split(";").map((f) => f.trim()).filter((f) => f.length > 0);
+
+  const head = fields[0] ?? "";
+  const headStart = ctx.content.indexOf(head);
+  const headParts = head.split(/\s+/).filter((p) => p.length > 0);
+  if (headParts[0] !== "CC" || headParts.length !== 3) {
+    const column = columnOf(ctx.raw, ctx.content, ctx.leading, head, Math.max(0, headStart));
+    throw new AfmParseError(`expected "CC name numparts", found "${head || "(nothing)"}"`, ctx.number, column, ctx.raw);
+  }
+  const name = headParts[1];
+  const numPartsText = headParts[2];
+  const numParts = Number(numPartsText);
+  if (!Number.isInteger(numParts) || numParts < 0) {
+    const column = columnOf(ctx.raw, ctx.content, ctx.leading, numPartsText, headStart);
+    throw new AfmParseError(`expected an integer part count after "CC ${name}", found "${numPartsText}"`, ctx.number, column, ctx.raw);
+  }
+
+  const parts: CompositePart[] = [];
+  let searchFrom = headStart + head.length;
+  for (let i = 1; i < fields.length; i++) {
+    const field = fields[i];
+    const fieldStart = ctx.content.indexOf(field, searchFrom);
+    searchFrom = fieldStart + field.length;
+
+    const pccParts = field.split(/\s+/).filter((p) => p.length > 0);
+    if (pccParts[0] !== "PCC" || pccParts.length !== 4) {
+      const column = columnOf(ctx.raw, ctx.content, ctx.leading, field, Math.max(0, fieldStart));
+      throw new AfmParseError(`expected "PCC name xoffset yoffset" in composite "${name}", found "${field}"`, ctx.number, column, ctx.raw);
+    }
+    const [, partName, xText, yText] = pccParts;
+    const xOffset = Number(xText);
+    const yOffset = Number(yText);
+    if (!Number.isFinite(xOffset) || !Number.isFinite(yOffset)) {
+      const column = columnOf(ctx.raw, ctx.content, ctx.leading, field, Math.max(0, fieldStart));
+      throw new AfmParseError(`expected numeric offsets for "PCC ${partName}" in composite "${name}"`, ctx.number, column, ctx.raw);
+    }
+    parts.push({ name: partName, xOffset, yOffset });
+  }
+
+  if (parts.length !== numParts) {
+    throw new AfmParseError(
+      `composite "${name}" declares ${numParts} part(s) but has ${parts.length}`,
+      ctx.number,
+      ctx.leading + 1,
+      ctx.raw,
+    );
+  }
+
+  return { name, parts };
+}
+
 /**
  * Parses the text of an AFM (Adobe Font Metrics) file into structured
  * metrics. Throws AfmParseError, with a line and column pointing at the
@@ -203,6 +276,7 @@ export function parseAfm(source: string): FontMetrics {
   let sawStart = false;
   let inCharMetrics = false;
   let inKernPairs = false;
+  let inComposites = false;
   let fontName: string | undefined;
   let fullName: string | undefined;
   let familyName: string | undefined;
@@ -218,6 +292,7 @@ export function parseAfm(source: string): FontMetrics {
   let descender: number | undefined;
   const characters: CharacterMetric[] = [];
   const kerningPairs: KerningPair[] = [];
+  const composites: CompositeCharacter[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const ctx = lineContext(lines[i] ?? "", i + 1);
@@ -243,6 +318,15 @@ export function parseAfm(source: string): FontMetrics {
         kerningPairs.push(parseKernPairLine(ctx));
       }
       // KPY/KPH and other non-KPX pair kinds aren't modeled; skip them.
+      continue;
+    }
+
+    if (inComposites) {
+      if (ctx.content === "EndComposites") {
+        inComposites = false;
+        continue;
+      }
+      composites.push(parseCompositeLine(ctx));
       continue;
     }
 
@@ -296,11 +380,12 @@ export function parseAfm(source: string): FontMetrics {
       case "StartKernPairs":
         inKernPairs = true;
         break;
+      case "StartComposites":
+        inComposites = true;
+        break;
       default:
         // StartKernData/EndKernData are just a container around
-        // StartKernPairs and carry no data of their own. Composite-character
-        // data and anything else the spec allows but this library doesn't
-        // model yet is skipped too.
+        // StartKernPairs and carry no data of their own.
         break;
     }
   }
@@ -323,6 +408,7 @@ export function parseAfm(source: string): FontMetrics {
     unitsPerEm: 1000,
     characters,
     kerningPairs,
+    composites,
   };
   if (fullName !== undefined) metrics.fullName = fullName;
   if (familyName !== undefined) metrics.familyName = familyName;
